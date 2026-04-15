@@ -15,6 +15,7 @@ systemd_dep = dependency('systemd')
 sdbusplus_dep = dependency('sdbusplus')
 phosphor_dbus_dep = dependency('phosphor-dbus-interfaces')
 phosphor_logging_dep = dependency('phosphor-logging')
+zlib_dep = dependency('zlib')
 
 systemd_system_unit_dir = systemd_dep.get_variable(
     'systemdsystemunitdir',
@@ -40,6 +41,11 @@ install_data(
 src_files = files(
     'src/main.cpp',
     'src/chif_daemon.cpp',
+    'src/smif_service.cpp',
+    'src/health_service.cpp',
+    'src/ev_storage.cpp',
+    'src/uefi_fv.cpp',
+    'src/platdef_extract.cpp',
     'src/rom_service.cpp',
     'src/smbios_writer.cpp',
     'src/mdr_bridge.cpp',
@@ -53,6 +59,7 @@ executable(
         phosphor_dbus_dep,
         phosphor_logging_dep,
         systemd_dep,
+        zlib_dep,
     ],
     install: true,
     install_dir: get_option('bindir'),
@@ -63,6 +70,9 @@ if get_option('tests').enabled()
     gtest_main_dep = dependency('gtest_main')
 
     test_src_common = files(
+        'src/smif_service.cpp',
+        'src/health_service.cpp',
+        'src/ev_storage.cpp',
         'src/rom_service.cpp',
         'src/smbios_writer.cpp',
         'src/mdr_bridge.cpp',

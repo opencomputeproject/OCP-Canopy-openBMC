@@ -7,12 +7,10 @@ BBFILES ?= ""
 
 BBLAYERS ?= " \
   ##OEROOT##/meta-canopy \
-  ##OEROOT##/meta-canopy/meta-hpe \
-  ##OEROOT##/meta-canopy/meta-hpe/meta-common \
-  ##OEROOT##/meta-canopy/meta-hpe/meta-gxp \
   ##OEROOT##/openbmc/meta \
   ##OEROOT##/openbmc/meta-openembedded/meta-oe \
   ##OEROOT##/openbmc/meta-openembedded/meta-networking \
   ##OEROOT##/openbmc/meta-openembedded/meta-python \
   ##OEROOT##/openbmc/meta-phosphor \
+  ##OEROOT##/openbmc/meta-aspeed \
   "

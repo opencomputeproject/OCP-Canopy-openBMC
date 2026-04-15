@@ -2,19 +2,24 @@
 // Copyright (C) 2026 9elements GmbH
 
 #include "chif_daemon.hpp"
+#include "ev_storage.hpp"
+#include "health_service.hpp"
 #include "mdr_bridge.hpp"
+#include "platdef_extract.hpp"
 #include "rom_service.hpp"
 #include "smif_service.hpp"
 #include "smbios_writer.hpp"
 
-#include <fcntl.h>
-#include <signal.h>
-#include <unistd.h>
-
-#include <memory>
-
 #include <phosphor-logging/lg2.hpp>
 #include <sdbusplus/bus.hpp>
+
+#include <fcntl.h>
+#include <unistd.h>
+
+#include <cerrno>
+#include <csignal>
+#include <cstring>
+#include <memory>
 
 namespace
 {
@@ -70,7 +75,7 @@ int main()
     lg2::info("GXP CHIF service starting, version 1.0.0");
 
     // Open the CHIF device
-    int fd = open(chifDevice, O_RDWR);
+    int fd = open(chifDevice, O_RDWR | O_CLOEXEC);
     if (fd < 0)
     {
         lg2::error("Failed to open {DEV}: {ERR}", "DEV", chifDevice, "ERR",
@@ -87,12 +92,25 @@ int main()
     // Create service components
     chif::SmbiosWriter smbiosWriter;
     chif::MdrBridge mdrBridge(bus);
+    chif::EvStorage evStorage;
+    if (evStorage.load() < 0)
+    {
+        lg2::warning("EV storage failed to load, starting with empty store");
+    }
+
+    // Extract PlatDef from host BIOS SPI flash and build I2C segment→bus map
+    auto platDefBlob = chif::extractPlatDef();
+    auto segmentBusMap =
+        platDefBlob.empty()
+            ? std::unordered_map<uint8_t, int>{}
+            : chif::buildSegmentBusMap(chif::parseI2cSegments(platDefBlob));
 
     // Build daemon and register handlers
     chif::ChifDaemon daemon(std::move(channel));
     daemon.registerHandler(
         std::make_unique<chif::RomService>(smbiosWriter, &mdrBridge));
-    daemon.registerHandler(std::make_unique<chif::SmifService>());
+    daemon.registerHandler(std::make_unique<chif::SmifService>(
+        &evStorage, std::move(segmentBusMap)));
     daemon.registerHandler(std::make_unique<chif::HealthService>());
 
     // Install signal handlers for graceful shutdown

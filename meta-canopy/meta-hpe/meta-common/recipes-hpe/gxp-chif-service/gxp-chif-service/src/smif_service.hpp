@@ -2,53 +2,82 @@
 // Copyright (C) 2026 9elements GmbH
 #pragma once
 
+#include "ev_storage.hpp"
 #include "packet.hpp"
 
-#include <phosphor-logging/lg2.hpp>
-
-#include <cstring>
+#include <cstdint>
+#include <span>
+#include <unordered_map>
 
 namespace chif
 {
 
-// SMIF service handler — responds to BIOS commands.
-//
-// Most commands return ErrorCode=1 (not implemented). Only the BIOS
-// readiness command (0x0008) and boot progress acknowledgements return
-// success, because the BIOS gates SMBIOS transfer on BMC readiness.
+// ---------------------------------------------------------------------------
+// SMIF command codes (service_id 0x00)
+// ---------------------------------------------------------------------------
+
+// Hardware info
+inline constexpr uint16_t smifCmdHwRevision = 0x0002;
+inline constexpr uint16_t smifCmdFlashInfo = 0x0050;
+inline constexpr uint16_t smifCmdDateTime = 0x0055;
+
+// Network
+inline constexpr uint16_t smifCmdIPv4Config = 0x0006;
+inline constexpr uint16_t smifCmdNicConfig = 0x0063;
+inline constexpr uint16_t smifCmdIPv6Config = 0x0120;
+
+// BIOS readiness / lifecycle
+inline constexpr uint16_t smifCmdBiosReady = 0x0008;
+inline constexpr uint16_t smifCmdBiosSync = 0x0136;
+inline constexpr uint16_t smifCmdSecurityStateGet = 0x0139;
+inline constexpr uint16_t smifCmdPostState = 0x0143;
+inline constexpr uint16_t smifCmdSecurityStateSet = 0x0158;
+inline constexpr uint16_t smifCmdBootProgress = 0x0209;
+
+// PCI / hardware
+inline constexpr uint16_t smifCmdPciDeviceInfo = 0x0035;
+inline constexpr uint16_t smifCmdI2cTransaction = 0x0072;
+inline constexpr uint16_t smifCmdGpioCpld = 0x0088;
+inline constexpr uint16_t smifCmdLicenseKey = 0x006E;
+inline constexpr uint16_t smifCmdFieldAccess = 0x0153;
+inline constexpr uint16_t smifCmdPowerRegulator = 0x0176;
+
+// EV storage
+inline constexpr uint16_t smifCmdGetEvByIndex = 0x012B;
+inline constexpr uint16_t smifCmdSetDeleteEv = 0x012C;
+inline constexpr uint16_t smifCmdGetEvAuthStatus = 0x012D;
+inline constexpr uint16_t smifCmdGetEvByName = 0x0130;
+inline constexpr uint16_t smifCmdEvStats = 0x0132;
+inline constexpr uint16_t smifCmdEvState = 0x0133;
+
+// EV operation flags (for 0x012C SetDeleteEv)
+inline constexpr uint8_t evFlagSet = 0x01;
+inline constexpr uint8_t evFlagDelete = 0x02;
+inline constexpr uint8_t evFlagDeleteAll = 0x04;
+
+// Event logging
+inline constexpr uint16_t smifCmdQuickEventLog = 0x0146;
+
+// PlatDef
+inline constexpr uint16_t smifCmdPlatDefUpload = 0x0200;
+inline constexpr uint16_t smifCmdPlatDefDownload = 0x0202;
+inline constexpr uint16_t smifCmdPlatDefV2Begin = 0x0203;
+inline constexpr uint16_t smifCmdPlatDefV2Chunk = 0x0204;
+inline constexpr uint16_t smifCmdPlatDefV2Query = 0x0205;
+inline constexpr uint16_t smifCmdPlatDefV2Download = 0x0206;
+inline constexpr uint16_t smifCmdPlatDefV2End = 0x0207;
+
+// ---------------------------------------------------------------------------
+// SmifService — handler for service_id 0x00.
+// ---------------------------------------------------------------------------
 class SmifService : public ServiceHandler
 {
   public:
+    explicit SmifService(EvStorage* evStorage = nullptr,
+                        std::unordered_map<uint8_t, int> segmentBusMap = {});
+
     int handle(std::span<const uint8_t> request,
-               std::span<uint8_t> response) override
-    {
-        if (request.size() < sizeof(ChifPktHeader))
-        {
-            return -1;
-        }
-
-        auto hdr = parseHeader(request);
-
-        switch (hdr.command)
-        {
-            // --- Commands that MUST return error to avoid infinite loops ---
-            case 0x012b: // EV get by index — must return "not found"
-            case 0x012d: // EV get related — must return "not found"
-            case 0x0130: // EV get by name — must return "not found"
-                return buildSimpleResponse(hdr, response, 1);
-
-            // --- Commands that return success ---
-            case 0x0008: // BIOS readiness
-                lg2::info("SMIF: BIOS readiness query — responding ready");
-                return buildSimpleResponse(hdr, response, 0);
-            default:
-                // Accept all other commands with success.
-                // This lets the BIOS proceed through its full POST flow
-                // including UEFI var store uploads (0x0203-0x0207) and
-                // other non-enumeration commands.
-                return buildSimpleResponse(hdr, response, 0);
-        }
-    }
+               std::span<uint8_t> response) override;
 
     uint8_t serviceId() const override
     {
@@ -56,63 +85,43 @@ class SmifService : public ServiceHandler
     }
 
   private:
-    static int buildSimpleResponse(const ChifPktHeader& reqHdr,
+    // EV command handlers
+    int handleGetEvByIndex(const ChifPktHeader& hdr,
+                           std::span<const uint8_t> reqPayload,
+                           std::span<uint8_t> response);
+    int handleSetDeleteEv(const ChifPktHeader& hdr,
+                          std::span<const uint8_t> reqPayload,
+                          std::span<uint8_t> response);
+    int handleGetEvByName(const ChifPktHeader& hdr,
+                          std::span<const uint8_t> reqPayload,
+                          std::span<uint8_t> response);
+    int handleEvStats(const ChifPktHeader& hdr,
+                      std::span<uint8_t> response);
+    int handleEvState(const ChifPktHeader& hdr,
+                      std::span<uint8_t> response);
+    int handleGetEvAuthStatus(const ChifPktHeader& hdr,
+                              std::span<uint8_t> response);
+
+    // I2C proxy handler
+    int handleI2cProxy(const ChifPktHeader& hdr,
+                       std::span<const uint8_t> reqPayload,
+                       std::span<uint8_t> response);
+
+    // PlatDef v1 download handler
+    int handlePlatDefDownload(const ChifPktHeader& hdr,
+                              std::span<const uint8_t> reqPayload,
+                              std::span<uint8_t> response);
+
+    // Response helpers
+    static int buildSimpleResponse(const ChifPktHeader& hdr,
                                    std::span<uint8_t> response,
-                                   uint32_t errorCode)
-    {
-        constexpr uint16_t respSize =
-            static_cast<uint16_t>(sizeof(ChifPktHeader) + sizeof(uint32_t));
+                                   uint32_t errorCode);
+    static int buildEvDataResponse(const ChifPktHeader& hdr,
+                                   std::span<uint8_t> response,
+                                   const EvEntry& ev);
 
-        if (response.size() < respSize)
-        {
-            return -1;
-        }
-
-        initResponse(response, reqHdr, respSize);
-
-        auto resp = responsePayload(response);
-        std::memcpy(resp.data(), &errorCode, sizeof(errorCode));
-
-        return respSize;
-    }
-};
-
-// Minimal Health service handler (SVC=0x10) — BIOS checks BMC health.
-// Responds with success (ErrorCode=0) to all commands.
-class HealthService : public ServiceHandler
-{
-  public:
-    int handle(std::span<const uint8_t> request,
-               std::span<uint8_t> response) override
-    {
-        if (request.size() < sizeof(ChifPktHeader))
-        {
-            return -1;
-        }
-
-        auto hdr = parseHeader(request);
-
-        constexpr uint16_t respSize =
-            static_cast<uint16_t>(sizeof(ChifPktHeader) + sizeof(uint32_t));
-
-        if (response.size() < respSize)
-        {
-            return -1;
-        }
-
-        initResponse(response, hdr, respSize);
-
-        uint32_t errorCode = 0;
-        auto resp = responsePayload(response);
-        std::memcpy(resp.data(), &errorCode, sizeof(errorCode));
-
-        return respSize;
-    }
-
-    uint8_t serviceId() const override
-    {
-        return healthServiceId;
-    }
+    EvStorage* evStorage_;
+    std::unordered_map<uint8_t, int> segmentToBus_;
 };
 
 } // namespace chif
